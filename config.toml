@@ -1,0 +1,318 @@
+[global] #Global paramters
+run_path = 'sac_ml_opt'    
+random_seed = 3407     
+max_iteration = 20     
+workflow_path = '' 
+
+### 1) Train step ###
+[train] 
+cutoff = 4     
+val_ratio = 0.2     
+node_size = 64     
+num_interactions = 4     
+output_dir = 'model'     
+max_steps = 450
+batch_size = 16     
+initial_lr = 0.0001     
+forces_weight = 0.98     
+charge_weight = 0.1     
+stress_weight = 1000     
+log_interval = 1    
+dataset = './train_data/sac_training_filtered_train.xyz'
+val_dataset = "./train_data/sac_training_filtered_val.xyz"
+plateau_scheduler = true    
+normalization = true     
+atomwise_normalization = true      
+stop_patience = 100 
+
+compute_forces = true     
+compute_stress = false     
+compute_magmom = true    
+compute_bader_charge = false     
+
+stop_after_train = false     
+load_prev_iter_model = true     
+
+[train.ensemble]
+
+64_node_5_layer  = {node_size = 64,  num_interactions = 5}
+
+96_node_3_layer  = {node_size = 96,  num_interactions = 3}
+96_node_5_layer  = {node_size = 96,  num_interactions = 5}
+
+128_node_4_layer = {node_size = 128, num_interactions = 4}
+128_node_6_layer = {node_size = 128, num_interactions = 6}
+
+### 2) Simulate step ###
+[simulate.optimize] 
+opt_steps = 250
+opt_fmax = 0.025    
+opt_algo = 'BFGS'
+opt_cell = false
+
+force_sd_threshold = 0.5
+max_force_sd = 1.5
+
+[simulate.runs.opt_batch1]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch1.xyz'
+
+[simulate.runs.opt_batch2]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch2.xyz'
+
+[simulate.runs.opt_batch3]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch3.xyz'
+
+[simulate.runs.opt_batch4]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch4.xyz'
+
+[simulate.runs.opt_batch5]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch5.xyz'
+
+[simulate.runs.opt_batch6]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch6.xyz'
+
+[simulate.runs.opt_batch7]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch7.xyz'
+
+[simulate.runs.opt_batch8]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch8.xyz'
+
+[simulate.runs.opt_batch9]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch9.xyz'
+
+[simulate.runs.opt_batch10]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch10.xyz'
+
+[simulate.runs.opt_batch11]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch11.xyz'
+
+[simulate.runs.opt_batch12]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch12.xyz'
+
+[simulate.runs.opt_batch13]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch13.xyz'
+
+[simulate.runs.opt_batch14]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch14.xyz'
+
+[simulate.runs.opt_batch15]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch15.xyz'
+
+[simulate.runs.opt_batch16]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch16.xyz'
+
+[simulate.runs.opt_batch17]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch17.xyz'
+
+[simulate.runs.opt_batch18]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch18.xyz'
+
+[simulate.runs.opt_batch19]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch19.xyz'
+
+[simulate.runs.opt_batch20]
+method = 'optimize'
+structure_path = './train_data/unlabeled_data/training_batch20.xyz'
+
+
+
+
+### 3) Select step ###
+[select]
+train_set = './train_data/sac_training_filtered_train.xyz'
+kernel = "full-g"     
+selection = "lcmd_greedy"     
+n_random_features = 500    
+batch_size = 15
+
+[select.runs.opt_batch1]
+method = 'optimize'
+
+[select.runs.opt_batch2]
+method = 'optimize'
+
+[select.runs.opt_batch3]
+method = 'optimize'
+
+[select.runs.opt_batch4]
+method = 'optimize'
+
+[select.runs.opt_batch5]
+method = 'optimize'
+
+[select.runs.opt_batch6]
+method = 'optimize'
+
+[select.runs.opt_batch7]
+method = 'optimize'
+
+[select.runs.opt_batch8]
+method = 'optimize'
+
+[select.runs.opt_batch9]
+method = 'optimize'
+
+[select.runs.opt_batch10]
+method = 'optimize'
+
+[select.runs.opt_batch11]
+method = 'optimize'
+
+[select.runs.opt_batch12]
+method = 'optimize'
+
+[select.runs.opt_batch13]
+method = 'optimize'
+
+[select.runs.opt_batch14]
+method = 'optimize'
+
+[select.runs.opt_batch15]
+method = 'optimize'
+
+[select.runs.opt_batch16]
+method = 'optimize'
+
+[select.runs.opt_batch17]
+method = 'optimize'
+
+[select.runs.opt_batch18]
+method = 'optimize'
+
+[select.runs.opt_batch19]
+method = 'optimize'
+
+[select.runs.opt_batch20]
+method = 'optimize'
+
+
+### 4) Labeling step ###
+[labeling] 
+train_set = './Example_data/sac_training_filtered_train.xyz'
+method='VASP' 
+
+[labeling.runs.opt_batch1]
+nsw = 500
+
+[labeling.runs.opt_batch2]
+nsw = 500
+
+[labeling.runs.opt_batch3]
+nsw = 500
+
+[labeling.runs.opt_batch4]
+nsw = 500
+
+[labeling.runs.opt_batch5]
+nsw = 500
+
+[labeling.runs.opt_batch6]
+nsw = 500
+
+[labeling.runs.opt_batch7]
+nsw = 500
+
+[labeling.runs.opt_batch8]
+nsw = 500
+
+[labeling.runs.opt_batch9]
+nsw = 500
+
+[labeling.runs.opt_batch10]
+nsw = 500
+
+[labeling.runs.opt_batch11]
+nsw = 500
+
+[labeling.runs.opt_batch12]
+nsw = 500
+
+[labeling.runs.opt_batch13]
+nsw = 500
+
+[labeling.runs.opt_batch14]
+nsw = 500
+
+[labeling.runs.opt_batch15]
+nsw = 500
+
+[labeling.runs.opt_batch16]
+nsw = 500
+
+[labeling.runs.opt_batch17]
+nsw = 500
+
+[labeling.runs.opt_batch18]
+nsw = 500
+
+[labeling.runs.opt_batch19]
+nsw = 500
+
+[labeling.runs.opt_batch20]
+nsw = 500
+
+
+
+[labeling.VASP]
+amin = 0.100000
+amix = 0.020000
+amix_mag = 0.080000
+bmix = 1.000000
+bmix_mag = 1.000000
+encut = 600.000000
+potim = 0.100000
+sigma = 0.100000
+eb_k = 80.000000
+ediff = 1.00e-05
+ediffg = -2.50e-02
+algo = 'Normal'
+gga = 'bf'
+zab_vdw = -1.886700
+xc = 'PBE'
+prec = 'Accurate'
+ibrion = 2
+icharg = 1
+idipol = 3
+isif = 0
+ismear = -1
+ispin = 2
+isym = 2
+lmaxmix = 4
+lorbit = 11
+maxmix = 200
+nelm = 100
+nelmdl = -8
+nelmin = 4
+nsim = 4
+nsw = 1
+lasph = true
+lcharg = true
+lcorr = true
+ldiag = true
+luse_vdw = true
+lwave = false
+gamma = false
+lsol = true
+kpts = [3,3,1]
+lreal = 'auto'
+ncore = 4
+command = 'srun /home/modules/energy/software/VASP/5.4.4-intel-2023a-vtst-vaspsol-wannier-beef/bin/vasp_std'
