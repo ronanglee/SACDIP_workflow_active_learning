@@ -51,6 +51,8 @@ def main(cfg,run_list,**kwargs):
     # Add random seed and model path to the trained MLPs
     params['random_seed'] = main_params['global']['random_seed']
     params['model_path'] = os.path.join(run_path,'train', f'iter_{iter_idx}')
+    # Use the same model type as the train step ('cpainn' or 'mace')
+    params.setdefault('model_name', main_params['train'].get('model', 'cpainn'))
 
     # Save the total parameters
     with open(os.path.join(system_dir, "params.toml"), "w") as f:

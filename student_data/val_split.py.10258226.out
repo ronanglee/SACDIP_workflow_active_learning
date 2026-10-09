@@ -1,8 +1,0 @@
-venv: /home/energy/s234441/enviroments/curator/bin/activate
-Total number of structures: 13351
-Number of groups found: 3599
-Train: 10673 structures
-Validation: 2678 structures
-Actual validation fraction: 0.2006
-Train file written to: /home/energy/s234441/mlip_bsc9/ML_workflow_BSc/Example_data/sac_training_filtered_train.xyz
-Validation file written to: /home/energy/s234441/mlip_bsc9/ML_workflow_BSc/Example_data/sac_training_filtered_val.xyz

@@ -187,6 +187,71 @@ def update_namespace(ns: argparse.Namespace, d: dict) -> None:
         ns.__dict__[k] = v
 
 
+def train_mace_member(main_params, params, iter_idx, idx):
+    """
+    Train one MACE ensemble member with mace_run_train.
+    All options in the [train.mace] table (and the member's [train.ensemble] entry) are passed on to mace_run_train.
+    """
+    from cPaiNN.mace_tools import train_mace, MACE_MODEL_NAME
+
+    if not params.get("dataset", None):
+        raise ValueError("Missing training dataset. Set 'dataset' in the TOML file.")
+
+    # Get run path and create the output directory
+    run_path = main_params["global"]["run_path"]
+    output_name = params.get("output_dir", "model")
+    output_dir = os.path.join(run_path, "train", f"iter_{iter_idx}", output_name)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Setup logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
+        handlers=[
+            logging.FileHandler(os.path.join(output_dir, "printlog.txt"), mode="w"),
+            logging.StreamHandler(),
+        ],
+    )
+    logging.info(f"Iteration: {iter_idx}")
+
+    mace_options = dict(params.get("mace", {}))
+
+    # The training and validation data are the workflow datasets (labeled structures are appended to these)
+    mace_options["train_file"] = params["dataset"]
+    if params.get("val_dataset", None):
+        mace_options["valid_file"] = params["val_dataset"]
+
+    # Each member needs its own seed, otherwise all members are identical and the force uncertainty is zero
+    mace_options.setdefault("seed", main_params["global"]["random_seed"] + idx)
+
+    # Fine-tune from the same member of the previous iteration
+    if iter_idx > 0 and params.get("load_prev_iter_model", True):
+        prev_model = os.path.join(run_path, "train", f"iter_{iter_idx-1}", output_name, MACE_MODEL_NAME)
+        if os.path.exists(prev_model):
+            logging.info(f"Load model from {prev_model}")
+            mace_options["foundation_model"] = prev_model
+
+    # Save the toml parameters
+    params["mace"] = mace_options
+    with open(os.path.join(output_dir, "params.toml"), "w") as f:
+        toml.dump(params, f)
+
+    train_mace(mace_options, output_dir)
+
+    # Find simulation keys
+    run_list = list(main_params["simulate"]["runs"].keys())
+    return_parameters = {
+        DYNAMICWIDTHGROUP_KEY: len(run_list),
+        "run_list": str(run_list),
+    }
+
+    # Include the stop after train parameter
+    if iter_idx > 0:
+        return_parameters[CYCLICALGROUP_KEY] = params.get("stop_after_train", False)
+
+    return True, return_parameters
+
+
 def main(cfg, **kwargs):
     from cPaiNN.data import AseDataset, collate_atomsdata
     from cPaiNN.model import PainnModel
@@ -227,11 +292,23 @@ def main(cfg, **kwargs):
     # Update the random seed
     params["random_seed"] = main_params["global"]["random_seed"]
 
+    # Model type: 'cpainn' (default) or 'mace'
+    model_type = params.get("model", "cpainn")
+
     # If ensemble training is used, update the parameters and rename model output
     if "ensemble" in params:
         ensemble_keys = list(params["ensemble"].keys())
-        params.update(params["ensemble"][ensemble_keys[idx]])
+        if model_type == "mace":
+            # For MACE the ensemble entries are mace_run_train options for each member
+            params["mace"] = {**params.get("mace", {}), **params["ensemble"][ensemble_keys[idx]]}
+        else:
+            params.update(params["ensemble"][ensemble_keys[idx]])
         params["output_dir"] = ensemble_keys[idx]
+
+    if model_type == "mace":
+        return train_mace_member(main_params, params, iter_idx, idx)
+    elif model_type != "cpainn":
+        raise NotImplementedError(f"Model {model_type} not implemented. Use 'cpainn' or 'mace'")
 
     # Load argument Namespace
     args = get_arguments()

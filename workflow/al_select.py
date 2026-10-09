@@ -30,6 +30,98 @@ def update_namespace(ns:argparse.Namespace, d:dict) -> None:
     for k, v in d.items():
         ns.__dict__[k] = v
 
+def load_pool(pool_set, pool_out_path):
+    """Read the pool set and remove structures with max force > 50 eV/A"""
+    dataset = []
+    for traj in pool_set:
+        if not os.path.exists(traj):
+            logging.info(f"File {traj} does not exist!")
+            continue
+        if Path(traj).stat().st_size > 0:
+            dataset += read(traj, index=':')
+
+    dataset_new = []
+    max_force_threshold = 50
+    skipped = 0
+    for atoms in dataset:
+        try:
+            atoms.get_potential_energy()
+            forces = atoms.get_forces()
+            max_force = np.max(np.linalg.norm(forces, axis=1))
+            if max_force <= max_force_threshold:
+                dataset_new.append(atoms)
+            else:
+                skipped += 1
+                logging.info(f"Skipping structure with max force {max_force:.2f}")
+        except Exception as e:
+            logging.info(f"Skipping structure due to error: {e}")
+    logging.info(
+        f"Loaded {len(dataset_new)} valid structures out of {len(dataset)} "
+        f"(skipped {skipped} high-force structures)"
+    )
+    if len(dataset) != len(dataset_new):
+        write(pool_out_path, dataset_new)
+        logging.info(f"Filtered structures written to {pool_out_path}")
+        return dataset_new, pool_out_path
+    return dataset_new, pool_set
+
+
+def select_mace(args, system_name, system_dir, run_path, iter_idx, device):
+    """Active learning selection with an ensemble of MACE models (features are MACE descriptors)"""
+    from cPaiNN.active_learning import GeneralActiveLearning
+    from cPaiNN.mace_tools import load_mace_calculator
+
+    calc = load_mace_calculator(args.model_path, device=device)
+    assert args.pool_set and args.train_set
+
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)-5.5s]  %(message)s",
+        handlers=[
+            logging.FileHandler(os.path.join(system_dir,"al_log.log"), mode="w"),
+            logging.StreamHandler(),
+        ],
+    )
+    logging.info(f"Selected system: {system_name}")
+    logging.info(f"Selected method: {args.method}")
+    logging.info(f"Using {calc.num_models} MACE model(s) from {args.model_path}")
+    logging.info(f"Loding the dataset from {args.pool_set} and {args.train_set}")
+
+    pool, args.pool_set = load_pool(
+        args.pool_set,
+        os.path.join(run_path,'simulate', f'iter_{iter_idx}',system_name,'filtered_pool_set.xyz'),
+    )
+    datasets = {'pool': pool, 'train': read(args.train_set, index=':')}
+    logging.info(f"Train set size: {len(datasets['train'])}")
+    logging.info(f"Pool set size: {len(datasets['pool'])}")
+
+    if args.method == 'MD' and len(datasets['pool']) < args.batch_size*10:
+        raise RuntimeError(f"""The pool data set ({len(datasets['pool'])}) is not large enough for selection!
+        It should be larger than 10 times batch size ({args.batch_size*10}).
+        Check your simualtion!""")
+    if args.method not in ['MD', 'optimize']:
+        raise NotImplementedError(f"Selection for method {args.method} is not implemented for MACE")
+
+    al = GeneralActiveLearning(
+        kernel=args.kernel,
+        selection=args.selection,
+        n_random_features=args.n_random_features,
+    )
+    logging.info(f"Selecting {args.batch_size} structures")
+    indices = al.select_mace(calc, datasets, al_batch_size=min(args.batch_size, len(datasets['pool'])))
+
+    al_info = {
+        'kernel': args.kernel,
+        'selection': args.selection,
+        'dataset': args.pool_set,
+        'selected': indices,
+    }
+    with open(os.path.join(system_dir,'selected.json'), 'w') as f:
+        json.dump(al_info, f)
+
+    return True, {'system_name':system_name}
+
+
 def main(cfg,system_name,**kwargs):
 
     from cPaiNN.active_learning import GeneralActiveLearning
@@ -63,6 +155,8 @@ def main(cfg,system_name,**kwargs):
     params_select['random_seed'] = main_params['global']['random_seed']
     run_path = main_params['global']['run_path']
     params_select['model_path'] = os.path.join(run_path,'train', f'iter_{iter_idx}')
+    # Use the same model type as the train step ('cpainn' or 'mace')
+    params_select.setdefault('model_name', main_params['train'].get('model', 'cpainn'))
 
     
     # Load the system parameters
@@ -114,9 +208,12 @@ def main(cfg,system_name,**kwargs):
     with open(os.path.join(system_dir, "params.toml"), "w") as f:
         toml.dump(params_select, f)
 
+    if args.model_name == 'mace':
+        return select_mace(args, system_name, system_dir, run_path, iter_idx, device)
+
     # Load models
     if args.model_name != 'cpainn':
-        raise NotImplementedError("Only cpainn model is supported")
+        raise NotImplementedError("Only cpainn and mace models are supported")
 
     models = []
     model_pth = Path(args.model_path).rglob('*best_model.pth')

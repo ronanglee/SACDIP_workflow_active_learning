@@ -1,0 +1,11 @@
+perqueue.runner*
+student_data
+submit*
+train_data
+*/__pycache__
+*bak*
+.myqueue
+.pq*
+mace_valid*
+sac_ml_opt
+old_config.toml

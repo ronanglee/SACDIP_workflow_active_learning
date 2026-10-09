@@ -1,3 +1,11 @@
+# =====================================================================
+#  MACE version of config.toml
+#  Lines marked  # <<< NEW  or  # <<< CHANGED  differ from the cPaiNN config.
+#  Everything in [train.mace] is passed straight to mace_run_train
+#  (key = option name without '--'), so any option from example_mace.sh
+#  or `mace_run_train --help` can be added there.
+# =====================================================================
+
 [global] #Global paramters
 run_path = 'sac_ml_opt'    
 random_seed = 3407     
@@ -6,42 +14,72 @@ workflow_path = ''
 
 ### 1) Train step ###
 [train] 
-cutoff = 4     
-val_ratio = 0.2     
-node_size = 64     
-num_interactions = 4     
-output_dir = 'model'     
-max_steps = 450
-batch_size = 16     
-initial_lr = 0.0001     
-forces_weight = 0.98     
-charge_weight = 0.1     
-stress_weight = 1000     
-log_interval = 1    
-dataset = './train_data/sac_training_filtered_train.xyz'
-val_dataset = "./train_data/sac_training_filtered_val.xyz"
-plateau_scheduler = true    
-normalization = true     
-atomwise_normalization = true      
-stop_patience = 100 
-
-compute_forces = true     
-compute_stress = false     
-compute_magmom = true    
-compute_bader_charge = false     
-
+model = 'mace'     # <<< NEW  'mace' or 'cpainn' (default). Also sets the calculator used in the simulate and select steps
+dataset = './train_data/train.extxyz'     # passed to mace_run_train as --train_file; 90 % of the data, made by train_data/make_split.py
+#val_dataset = './train_data/test.extxyz'     # passed to mace_run_train as --valid_file (so valid_fraction is not used); the 10 % test split
 stop_after_train = false     
-load_prev_iter_model = true     
+load_prev_iter_model = true     # for MACE: iteration n is fine-tuned from the same member of iteration n-1 (--foundation_model)
+# The cPaiNN-only keys (cutoff, node_size, num_interactions, max_steps, initial_lr, forces_weight, charge_weight,
+# stress_weight, log_interval, plateau_scheduler, normalization, atomwise_normalization, stop_patience,
+# compute_*) are not used when model = 'mace'.     # <<< CHANGED
 
-[train.ensemble]
+# <<< NEW  table: options for mace_run_train (from example_mace.sh)
+# - flags without a value (--ema, --swa, --amsgrad, ...) are written as  ema = true
+# - dictionaries (E0s) are written as a string, exactly as on the command line
+# - name, log_dir, model_dir, checkpoints_dir, results_dir, train_file, valid_file are set by the workflow
+#   (<run_path>/train/iter_<n>/<ensemble member>/)
+# - seed is set per ensemble member in [train.ensemble]
+[train.mace]     # <<< NEW
+E0s = '{1: -3.57, 6: -7.87, 7: -6.97, 8: -3.33, 21: -3.62, 22: -5.88, 23: -6.63, 24: -7.17, 25: -6.45, 26: -5.65, 27: -4.29, 28: -2.53, 29: -0.64, 30: 2.06, 39: -4.02, 40: -5.83, 41: -7.26, 42: -8.17, 43: -7.57, 44: -6.26, 45: -4.24, 46: -1.96, 47: 0.55, 50: -1.18, 51: -2.09, 74: -10.43, 75: -9.59, 76: -8.28, 77: -5.82, 78: -3.13, 79: -0.25, 83: -1.19}'     # <<< NEW  Ti/V/Y/Zr/Nb/Tc added from bulk per-atom energies in /home/energy/projects/heih/tipapa/M_N4_X/metal
+atomic_numbers = '[1, 6, 7, 8, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 39, 40, 41, 42, 43, 44, 45, 46, 47, 50, 51, 74, 75, 76, 77, 78, 79, 83]'     # <<< NEW  must match the E0s keys: MACE sizes the E0 vector from E0s but the one-hot from the data elements unless this is given (else "mat1 and mat2 shapes cannot be multiplied (Nx26 and 32x1)"); also keeps the element table fixed across iterations
+foundation_model = '/home/energy/rogle/asm_orr_rxn/mlip/mace_mh1/initial_test/mace-mh-1.model'     # <<< NEW  used in iteration 0 only (later iterations start from the previous model)
+energy_key = 'energy'     # <<< NEW  the workflow xyz files store energy/forces as 'energy'/'forces' (not REF_energy/REF_forces)
+forces_key = 'forces'     # <<< NEW
+# test_file = './train_data/test.extxyz'     # <<< NEW (optional) must use the same energy_key/forces_key as above
+energy_weight = 1.0     # <<< NEW
+forces_weight = 100.0     # <<< NEW
+loss = 'universal'     # <<< NEW
+compute_stress = false     # <<< NEW
+eval_interval = 1     # <<< NEW
+error_table = 'PerAtomMAE'     # <<< NEW
+lr = 0.001     # <<< NEW
+weight_decay = 1e-8     # <<< NEW
+ema = true     # <<< NEW  flag (--ema)
+ema_decay = 0.995     # <<< NEW
+swa = true     # <<< NEW  flag (--swa); the stage-two (SWA) model is the one the workflow uses
+swa_energy_weight = 10.0     # <<< NEW
+swa_forces_weight = 100.0     # <<< NEW
+scheduler_patience = 5     # <<< NEW
+batch_size = 4     # <<< NEW
+valid_batch_size = 4     # <<< NEW
+pair_repulsion = true     # <<< NEW  flag
+max_num_epochs = 50     # <<< NEW  per iteration
+patience = 10     # <<< NEW
+amsgrad = true     # <<< NEW  flag
+device = 'cuda'     # <<< NEW  (mace_run_train defaults to cpu)
+clip_grad = 100     # <<< NEW
+keep_checkpoints = true     # <<< NEW  flag
+save_all_checkpoints = true     # <<< NEW  flag
+restart_latest = true     # <<< NEW  flag; a requeued train task continues from its own checkpoints
+default_dtype = 'float64'     # <<< NEW
+num_workers = 8     # <<< NEW
+save_cpu = true     # <<< NEW  flag
+enable_cueq = true     # <<< NEW
+plot = true     # <<< NEW
 
-64_node_5_layer  = {node_size = 64,  num_interactions = 5}
+# For MACE each entry is a set of mace_run_train options for one ensemble member.
+# Members need different seeds, otherwise they are identical and the force uncertainty is zero.
+# Any [train.mace] option can be overridden per member, e.g. {seed = 444, lr = 0.005}.
+# MACE's name for the cPaiNN node_size is num_channels (--node_size is not a mace_run_train option).
+# No seed given: each member gets random_seed + member index.
+[train.ensemble]     # <<< CHANGED
+#64_node_5_layer  = {num_channels = 64,  num_interactions = 5}     # <<< CHANGED
 
-96_node_3_layer  = {node_size = 96,  num_interactions = 3}
-96_node_5_layer  = {node_size = 96,  num_interactions = 5}
+#96_node_3_layer  = {num_channels = 96,  num_interactions = 3}     # <<< CHANGED
+#96_node_5_layer  = {num_channels = 96,  num_interactions = 5}     # <<< CHANGED
 
-128_node_4_layer = {node_size = 128, num_interactions = 4}
-128_node_6_layer = {node_size = 128, num_interactions = 6}
+#128_node_4_layer = {num_channels = 128, num_interactions = 4}     # <<< CHANGED
+128_node_6_layer = {num_channels = 128, num_interactions = 6}     # <<< CHANGED
 
 ### 2) Simulate step ###
 [simulate.optimize] 
@@ -138,10 +176,10 @@ structure_path = './train_data/unlabeled_data/training_batch20.xyz'
 
 ### 3) Select step ###
 [select]
-train_set = './train_data/sac_training_filtered_train.xyz'
-kernel = "full-g"     
+train_set = './train_data/train.extxyz'
+kernel = "gnn"     # <<< CHANGED  MACE has no gradient features: use "gnn" (MACE descriptors), "local_gnn" (+ max_det_greedy_local), "qbc-energy"/"qbc-force"/"random" (+ max_diag)
 selection = "lcmd_greedy"     
-n_random_features = 500    
+n_random_features = 500     # not used for MACE
 batch_size = 15
 
 [select.runs.opt_batch1]
@@ -207,68 +245,68 @@ method = 'optimize'
 
 ### 4) Labeling step ###
 [labeling] 
-train_set = './Example_data/sac_training_filtered_train.xyz'
+train_set = './train_data/train.extxyz'     # <<< CHANGED  was ./Example_data/..., which does not exist; new labels must be appended to [train] dataset
 method='VASP' 
 
 [labeling.runs.opt_batch1]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch2]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch3]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch4]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch5]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch6]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch7]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch8]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch9]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch10]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch11]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch12]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch13]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch14]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch15]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch16]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch17]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch18]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch19]
-nsw = 500
+nsw = 50
 
 [labeling.runs.opt_batch20]
-nsw = 500
+nsw = 50
 
 
 

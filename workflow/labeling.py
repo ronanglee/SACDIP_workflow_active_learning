@@ -12,52 +12,126 @@ import re
 
 from perqueue.constants import DYNAMICWIDTHGROUP_KEY,CYCLICALGROUP_KEY, ITER_KW, INDEX_KW
 
-ITER_RE = re.compile(r"Iteration\s*\d+\s*\(\s*(\d+)\s*\)")
+# Any SCF line in OSZICAR, e.g. "DAV:  12", "RMM:  3", "CG :  5", "DMP:  1"
+SCF_LINE_RE = re.compile(r"^\s*[A-Za-z]{2,4}\s*:\s*\d+")
+MAX_FORCE = 5.0  # eV/A, frames above this are treated as unphysical
 
-def get_last_iteration(outcar):
-    """Return (electronic_step, ionically_converged) from OUTCAR.
 
-    electronic_step: last electronic (DAV) step number, or None if none found.
-    ionically_converged: True if VASP wrote 'reached required accuracy'.
+def read_incar_value(incar_path, key, default=None, cast=float):
+    """Read a single tag from INCAR (ignores comments)."""
+    try:
+        with open(incar_path) as fh:
+            for line in fh:
+                line = line.split('#')[0].split('!')[0]
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    if k.strip().upper() == key.upper():
+                        return cast(v.split()[0])
+    except FileNotFoundError:
+        pass
+    return default
+
+
+def scf_steps_per_ionic(oszicar_path):
+    """Number of SCF iterations for each ionic step, from OSZICAR."""
+    counts, current = [], 0
+    with open(oszicar_path) as fh:
+        for line in fh:
+            if SCF_LINE_RE.match(line):
+                current += 1
+            elif 'F=' in line:      # end of an ionic step
+                counts.append(current)
+                current = 0
+    return counts
+
+
+def select_by_fmax(fmaxs, fmin=0.01, fmax_cap=MAX_FORCE, nbins=12, per_bin=2):
+    """Pick up to `per_bin` frames per log-spaced fmax bin, plus first and last."""
+    bins = np.logspace(np.log10(fmin), np.log10(fmax_cap), nbins)
+    counts, keep = {}, []
+    for i, f in enumerate(fmaxs):
+        if np.isnan(f):
+            continue
+        b = int(np.digitize(f, bins))
+        if counts.get(b, 0) < per_bin:
+            keep.append(i)
+            counts[b] = counts.get(b, 0) + 1
+    return sorted(set(keep + [0, len(fmaxs) - 1]))
+
+
+def label_vasp_trajectory(system_dir, db, al_ind, iter_idx, warning_traj):
+    """Write a force-binned subset of the ionic steps in vasprun.xml to `db`.
+
+    Returns (n_written, n_selected, scf_ok_all, ionic_ok).
     """
-    elec = None
-    converged = False
+    incar = os.path.join(system_dir, 'INCAR')
+    nelm = read_incar_value(incar, 'NELM', default=60, cast=int)
+    nsw = read_incar_value(incar, 'NSW', default=0, cast=int)
+    ediffg = read_incar_value(incar, 'EDIFFG', default=-0.05)
+    f_target = abs(ediffg) if ediffg < 0 else None   # force criterion only if EDIFFG < 0
 
-    with open(outcar, "r", errors="replace") as f:
-        for line in f:
-            if "Iteration" in line:
-                m = ITER_RE.search(line)
-                if m:
-                    elec = int(m.group(1))
-            elif "reached required accuracy" in line:
-                converged = True
+    frames = read(os.path.join(system_dir, 'vasprun.xml'), index=':')
+    n = len(frames)
+    scf_counts = scf_steps_per_ionic(os.path.join(system_dir, 'OSZICAR'))
 
-    return elec, converged
+    if len(scf_counts) != n:
+        print(f"WARNING [{al_ind}]: {n} frames in vasprun.xml but "
+              f"{len(scf_counts)} ionic steps in OSZICAR; skipping SCF check.")
+        scf_ok = [True] * n
+    else:
+        scf_ok = [c < nelm for c in scf_counts]
 
+    # fmax over free atoms (what EDIFFG acts on) for selection/convergence,
+    # over all atoms for the unphysical-force filter
+    fmaxs = np.array([np.max(np.linalg.norm(a.get_forces(), axis=1)) for a in frames])
+    fmaxs_all = np.array([np.max(np.linalg.norm(a.get_forces(apply_constraint=False), axis=1))
+                          for a in frames])
 
-def get_nelm(incar):
-    """Read NELM from INCAR"""
-    with open(incar, "r") as f:
-        for line in f:
-            if "NELM" in line:
-                return int(line.split("=")[-1].strip())
-    return None
+    # ionic convergence: final force below EDIFFG target, or finished before NSW
+    final_fmax = fmaxs[-1]
+    if nsw <= 1:
+        ionic_ok = True     # single point, nothing to converge
+    elif f_target is not None:
+        ionic_ok = bool(final_fmax < f_target)
+    else:
+        ionic_ok = n < nsw
+    if not ionic_ok:
+        print(f"WARNING [{al_ind}]: ionic relaxation not converged "
+              f"(final fmax = {final_fmax:.3f} eV/Å, {n} steps).")
 
+    keep = select_by_fmax(fmaxs, fmin=0.01, fmax_cap=MAX_FORCE, nbins=12, per_bin=2)
 
-def check_convergence(incar_file, outcar_file):
-    """
-    Check VASP SCF convergence.
-    
-    Converged if last DAV < NELM
-    """
-    
-    nelm = get_nelm(incar_file)
-    outcar_nelm, ionic_conv = get_last_iteration(outcar_file)
+    n_written = 0
+    for step in keep:
+        a = frames[step]
+        a.set_pbc(True)
+        fmax = float(fmaxs_all[step])
 
-    if nelm is None or last_dav is None:
-        return False
+        # 'fmax' is a reserved ASE db key, hence 'max_force'
+        meta = dict(al_ind=al_ind, iter=iter_idx, step=step, nsteps=n,
+                    max_force=fmax, is_initial=(step == 0), is_final=(step == n - 1),
+                    ionic_converged=ionic_ok)
 
-    return last_dav < nelm, ionic_conv
+        # SCF not converged at this ionic step -> forces unreliable
+        if not scf_ok[step]:
+            db.write(a, converged=False, reason='scf', **meta)
+            continue
+
+        # unphysical forces
+        if fmax > MAX_FORCE or np.isnan(fmax):
+            print(f"Skipping {al_ind} step {step}: large force {fmax:.2f} eV/Å")
+            a.info.update(meta)
+            write(warning_traj, a, append=True)
+            db.write(a, converged=False, reason='large_force', **meta)
+            continue
+
+        db.write(a, converged=True, **meta)
+        n_written += 1
+
+    print(f"[{al_ind}] kept {n_written}/{len(keep)} selected frames "
+          f"from {n} ionic steps (final fmax = {final_fmax:.3f} eV/Å)")
+
+    return n_written, len(keep), all(scf_ok[s] for s in keep), ionic_ok
 
 
 def get_processed_al_inds(db):
@@ -142,6 +216,13 @@ def main(cfg,system_name,**kwargs):
     task_name = 'labeling'
     params = main_params[task_name]
 
+    # Labeling harvests ionic steps from vasprun.xml/OSZICAR/INCAR, so only VASP is supported
+    if params.get('method') != 'VASP':
+        raise NotImplementedError(
+            f"labeling.py only supports method='VASP' (got {params.get('method')!r}); "
+            "the trajectory-harvesting logic relies on VASP output files."
+        )
+
     #ronan
     # Load the system parameters
     system_params = params['runs'][system_name]
@@ -216,137 +297,81 @@ def main(cfg,system_name,**kwargs):
     else:
         raise RuntimeError('Valid configarations for DFT calculation should be provided!')
     
-    try:
-        vasp_params = params['VASP']
-        gpaw_params = params['GPAW']
-    except KeyError as e:
-        print(f'no parameters given for {e}!')
-    
+    vasp_params = params['VASP']
+
     check_result = False
     check_result_elec = False
     check_result_ionic = False
+    failed_idx, scf_idx, ionic_idx = [], [], []
+    warning_traj = os.path.join(system_dir, 'large_force.xyz')
 
-    if params['method'] =='VASP':
-        from ase.calculators.vasp import Vasp
-        # set environment variables
-        #os.putenv('ASE_VASP_VDW', '/home/energy/modules/software/VASP/vasp-potpaw-5.4')
-        #os.putenv('VASP_PP_PATH', '/home/energy/modules/software/VASP/vasp-potpaw-5.4')
-        #os.putenv('ASE_VASP_COMMAND', 'mpirun vasp_std')
+    from ase.calculators.vasp import Vasp
+    # set environment variables
+    #os.putenv('ASE_VASP_VDW', '/home/energy/modules/software/VASP/vasp-potpaw-5.4')
+    #os.putenv('VASP_PP_PATH', '/home/energy/modules/software/VASP/vasp-potpaw-5.4')
+    #os.putenv('ASE_VASP_COMMAND', 'mpirun vasp_std')
 
-        # Update the parameters
-        vasp_params.update(system_params)
-        
-        vasp_params["lcharg"] = False
-        vasp_params["lwave"] = False
+    # Update the parameters
+    vasp_params.update(system_params)
 
-        calc = Vasp(**vasp_params,directory=system_dir)
-        unconverged_idx = []
-        for i, atoms in enumerate(images):
-            al_ind = al_indices[i]
-            atoms.set_pbc([True,True,True])
-            atoms.set_calculator(calc)
-            try:
-                atoms.get_potential_energy()
-            except (CalculationFailed, ValueError, IndexError) as e:
-                print(f"VASP calculation failed or output unparseable (e.g. lost atoms) for index {al_ind}: {e}")
-                check_result = True
-                db.write(atoms,al_ind=al_ind,converged=False)
-                unconverged_idx.append(i)
-                try: # If it did not save the CHGCAR
-                    copy(os.path.join(system_dir,'OSZICAR'), os.path.join(system_dir,f'OSZICAR_{i}_{al_ind}'))
-                    copy(os.path.join(system_dir,'CHGCAR'), os.path.join(system_dir,f'CHGCAR_{i}_{al_ind}'))
-                    os.remove(os.path.join(system_dir,'CHGCAR'))
-                except FileNotFoundError as e:
-                    print(e)
-                    pass
-                continue
+    vasp_params["lcharg"] = False
+    vasp_params["lwave"] = False
 
-            # force filter
-            forces = atoms.get_forces()
-            max_force = np.max(np.linalg.norm(forces, axis=1))
-            if max_force > 5.0 or np.isnan(max_force):
-                print(f"Skipping structure {al_ind} due to large force: {max_force:.2f} eV/A")
-                db.write(atoms, al_ind=al_ind, converged=False)
-                continue
-
-            # Check if the calculation is converged
-            elec_converged, ionic_conv = check_convergence(
-                os.path.join(system_dir,'INCAR'),
-                os.path.join(system_dir,'OUTCAR')
+    calc = Vasp(**vasp_params,directory=system_dir)
+    for i, atoms in enumerate(images):
+        al_ind = al_indices[i]
+        atoms.set_pbc([True,True,True])
+        atoms.calc = calc
+        try:
+            atoms.get_potential_energy()
+            n_written, n_selected, scf_ok, ionic_ok = label_vasp_trajectory(
+                system_dir, db, al_ind, iter_idx, warning_traj
             )
-            if elec_converged:
-                db.write(atoms,al_ind=al_ind,converged=True)
-            else:
-                check_result_elec = True
-                db.write(atoms,al_ind=al_ind,converged=False)
-                unconverged_idx.append(i)
-            if not ionic_conv:
-                check_result_ionic = True
-            try: # If you do not save CHGCAR
+        except (CalculationFailed, ValueError, IndexError, FileNotFoundError) as e:
+            print(f"VASP calculation failed or output unparseable (e.g. lost atoms) for index {al_ind}: {e}")
+            check_result = True
+            db.write(atoms,al_ind=al_ind,iter=iter_idx,converged=False,reason='failed')
+            failed_idx.append(int(al_ind))
+            try: # If it did not save the CHGCAR
                 copy(os.path.join(system_dir,'OSZICAR'), os.path.join(system_dir,f'OSZICAR_{i}_{al_ind}'))
-                copy(os.path.join(system_dir,'CHGCAR'), os.path.join(system_dir,f'CHGCAR_{i}_{al_ind}') )
-                copy(os.path.join(system_dir,'OUTCAR'), os.path.join(system_dir,f'OUTCAR_{i}_{al_ind}') )
-            except FileNotFoundError as e:
-                print(e)
-            try: # Same for WAVECAR
-                os.remove(os.path.join(system_dir,'WAVECAR'))
+                copy(os.path.join(system_dir,'CHGCAR'), os.path.join(system_dir,f'CHGCAR_{i}_{al_ind}'))
                 os.remove(os.path.join(system_dir,'CHGCAR'))
             except FileNotFoundError as e:
                 print(e)
+                pass
+            continue
 
-    elif params['method'] =='GPAW':
-        from gpaw import GPAW, KohnShamConvergenceError
-        gpaw_params.update(system_params)
-        calc = GPAW(**gpaw_params,txt=os.path.join(system_dir,'GPAW.txt') )
-        calc.set(txt='GPAW.txt')
-        unconverged_idx = []
-        for i, atoms in enumerate(images):
-            al_ind = al_indices[i]
-            atoms.set_pbc([True,True,True])
-            atoms.set_calculator(calc)
-            try:
-                atoms.get_potential_energy()
-            except KohnShamConvergenceError:
-                check_result = True
-                db.write(atoms,al_ind=al_ind,converged=False)
-                unconverged_idx.append(i)
-                copy(os.path.join(system_dir,'GPAW.txt'), os.path.join(system_dir,f'GPAW_{i}_{al_ind}.txt'))
-                continue
+        if not scf_ok:
+            check_result_elec = True
+            scf_idx.append(int(al_ind))
+        if not ionic_ok:
+            check_result_ionic = True
+            ionic_idx.append(int(al_ind))
+        try: # If you do not save CHGCAR
+            copy(os.path.join(system_dir,'OSZICAR'), os.path.join(system_dir,f'OSZICAR_{i}_{al_ind}'))
+            copy(os.path.join(system_dir,'CHGCAR'), os.path.join(system_dir,f'CHGCAR_{i}_{al_ind}') )
+            copy(os.path.join(system_dir,'OUTCAR'), os.path.join(system_dir,f'OUTCAR_{i}_{al_ind}') )
+        except FileNotFoundError as e:
+            print(e)
+        try: # Same for WAVECAR
+            os.remove(os.path.join(system_dir,'WAVECAR'))
+            os.remove(os.path.join(system_dir,'CHGCAR'))
+        except FileNotFoundError as e:
+            print(e)
 
-                # force filter
-            forces = atoms.get_forces()
-            max_force = np.max(np.linalg.norm(forces, axis=1))
-            if max_force > 5.0 or np.isnan(max_force):
-                print(f"Skipping structure {al_ind} due to large force: {max_force:.2f} eV/A")
-            
-                # save structure with energy and forces
-                atoms.info["max_force"] = max_force
-                atoms.info["al_ind"] = al_ind
-                atoms.info["iter"] = iter_idx
-            
-                write(warning_traj, atoms, append=True)
-            
-                db.write(atoms, al_ind=al_ind, converged=False)
-                continue
 
-            db.write(atoms,al_ind=al_ind,converged=True)
-            copy(os.path.join(system_dir,'GPAW.txt'), os.path.join(system_dir,f'GPAW_{i}_{al_ind}.txt'))
-    else:
-        raise RuntimeError('Valid configarations for DFT calculation should be provided!')
-
-    
     if check_result:
-        print("WARNING: Some DFT calculations did not converge.")
-        print(f"Unconverged indices: {unconverged_idx}")
-        print(f"Total unconverged: {len(unconverged_idx)}")
+        print("WARNING: Some DFT calculations failed.")
+        print(f"Failed indices: {failed_idx}")
+        print(f"Total failed: {len(failed_idx)}")
     if check_result_elec:
-        print("WARNING: Some DFT calculations did not converge electronically.")
-        print(f"Unconverged indices: {unconverged_idx}")
-        print(f"Total unconverged: {len(unconverged_idx)}")
+        print("WARNING: Some selected ionic steps did not converge electronically (saved with converged=False).")
+        print(f"Affected indices: {scf_idx}")
+        print(f"Total affected: {len(scf_idx)}")
     if check_result_ionic:
         print("WARNING: Some DFT calculations did not converge on ionic steps. Still saved the structures to the database.")
-        print(f"Unconverged indices: {unconverged_idx}")
-        print(f"Total unconverged: {len(unconverged_idx)}")
+        print(f"Unconverged indices: {ionic_idx}")
+        print(f"Total unconverged: {len(ionic_idx)}")
 
 
     # write to training set

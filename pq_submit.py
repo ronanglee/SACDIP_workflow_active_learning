@@ -36,8 +36,8 @@ if not os.path.isdir(run_path / "labeling"):
 
 ### Task resources ###
 # resources = "8:1:1:sm3090_devel:1h"
-resources = "8:1:sm3090_devel:4h"
-resources2 = "24:1:xeon24el8:25h"
+resources = "80:1:sm3090el9:2d"
+resources2 = "40:1:xeon40el8:25h"
 Train_resources = resources
 Simulation_resources = resources
 Activelearning_resources = resources
