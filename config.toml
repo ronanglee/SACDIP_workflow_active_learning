@@ -18,7 +18,10 @@ model = 'mace'     # <<< NEW  'mace' or 'cpainn' (default). Also sets the calcul
 dataset = './train_data/train.extxyz'     # passed to mace_run_train as --train_file; 90 % of the data, made by train_data/make_split.py
 #val_dataset = './train_data/test.extxyz'     # passed to mace_run_train as --valid_file (so valid_fraction is not used); the 10 % test split
 stop_after_train = false     
-load_prev_iter_model = true     # for MACE: iteration n is fine-tuned from the same member of iteration n-1 (--foundation_model)
+load_model = '/home/energy/rogle/asm_orr_rxn/mlip/active_learning/new_unlabeled_structures/SACDIP_workflow_active_learning/sac_ml_opt/train/iter_0/128_node_6_layer/best_model.model'
+skip_init_mace_train = false
+load_prev_iter_model = true
+#load_prev_iter_model = true     # for MACE: iteration n is fine-tuned from the same member of iteration n-1 (--foundation_model)
 # The cPaiNN-only keys (cutoff, node_size, num_interactions, max_steps, initial_lr, forces_weight, charge_weight,
 # stress_weight, log_interval, plateau_scheduler, normalization, atomwise_normalization, stop_patience,
 # compute_*) are not used when model = 'mace'.     # <<< CHANGED
@@ -180,7 +183,7 @@ train_set = './train_data/train.extxyz'
 kernel = "gnn"     # <<< CHANGED  MACE has no gradient features: use "gnn" (MACE descriptors), "local_gnn" (+ max_det_greedy_local), "qbc-energy"/"qbc-force"/"random" (+ max_diag)
 selection = "lcmd_greedy"     
 n_random_features = 500     # not used for MACE
-batch_size = 15
+batch_size = 5
 
 [select.runs.opt_batch1]
 method = 'optimize'
@@ -249,64 +252,64 @@ train_set = './train_data/train.extxyz'     # <<< CHANGED  was ./Example_data/..
 method='VASP' 
 
 [labeling.runs.opt_batch1]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch2]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch3]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch4]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch5]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch6]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch7]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch8]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch9]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch10]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch11]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch12]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch13]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch14]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch15]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch16]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch17]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch18]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch19]
-nsw = 50
+nsw = 5
 
 [labeling.runs.opt_batch20]
-nsw = 50
+nsw = 5
 
 
 
@@ -341,7 +344,7 @@ nelm = 100
 nelmdl = -8
 nelmin = 4
 nsim = 4
-nsw = 1
+nsw = 5
 lasph = true
 lcharg = true
 lcorr = true

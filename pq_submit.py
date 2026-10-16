@@ -36,21 +36,30 @@ if not os.path.isdir(run_path / "labeling"):
 
 ### Task resources ###
 # resources = "8:1:1:sm3090_devel:1h"
-resources = "80:1:sm3090el9:2d"
+resources = "10:1:sm3090el9:2d"
 resources2 = "40:1:xeon40el8:25h"
-Train_resources = resources
+Train_resources = "64:1:a100:2d"
+Train_after_label_res = "64:1:a100:2d"
 Simulation_resources = resources
 Activelearning_resources = resources
 Labeling_resources = resources2
 
 ### Set Tasks ###
+main_argument_train_init = {"cfg": str(config_file_path), "skip_init_train": config["train"]["skip_init_mace_train"]}
+main_argument_train_after_label = {"cfg": str(config_file_path), "skip_init_train": 'false'}
 main_argument = {"cfg": str(config_file_path)}
 
-Train = Task(
+Train_init = Task(
     workflow / "workflow/train.py",
     name="Train MLP model",
-    args=main_argument,
+    args=main_argument_train_init,
     resources=Train_resources,
+)
+Train_after_label = Task(
+    workflow / "workflow/train.py",
+    name="Train MLP model after DFT labeling",
+    args=main_argument_train_after_label,
+    resources=Train_after_label_res,
 )
 Simulation = Task(
     workflow / "workflow/simulation.py",
@@ -79,13 +88,13 @@ else:
     swg_width = 1
 
 # Initial training of the MLP model
-swg = StaticWidthGroup(Train, width=swg_width)
+swg = StaticWidthGroup(Train_init, width=swg_width)
 
 # The MLP labeling step where each structure follows each other independently
 dwg_labeling = DynamicWidthGroup([Simulation, Activelearning, Labeling])
 
 # The MLP training step where the model is trained after labeling. Here all structure needs to be finsihsed before the next training step
-dwg_train = DynamicWidthGroup(Train)
+dwg_train = DynamicWidthGroup(Train_after_label)
 
 # Combine the steps into a cyclical group
 cg = CyclicalGroup(

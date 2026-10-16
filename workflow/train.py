@@ -230,13 +230,21 @@ def train_mace_member(main_params, params, iter_idx, idx):
         if os.path.exists(prev_model):
             logging.info(f"Load model from {prev_model}")
             mace_options["foundation_model"] = prev_model
+    elif params['load_model']:
+        logging.info(f"Load model from {params['load_model']}")
+        mace_options["foundation_model"] = params['load_model']
 
     # Save the toml parameters
     params["mace"] = mace_options
     with open(os.path.join(output_dir, "params.toml"), "w") as f:
         toml.dump(params, f)
 
-    train_mace(mace_options, output_dir)
+    # A model that is already there (finished earlier, or copied in from another run) is used as is
+    best_model = os.path.join(output_dir, MACE_MODEL_NAME)
+    if os.path.exists(best_model) and params["skip_init_train"]:
+        logging.info(f"Found {best_model}, skipping training")
+    else:
+        train_mace(mace_options, output_dir)
 
     # Find simulation keys
     run_list = list(main_params["simulate"]["runs"].keys())
@@ -252,7 +260,7 @@ def train_mace_member(main_params, params, iter_idx, idx):
     return True, return_parameters
 
 
-def main(cfg, **kwargs):
+def main(cfg, skip_init_train, **kwargs):
     from cPaiNN.data import AseDataset, collate_atomsdata
     from cPaiNN.model import PainnModel
     import torch
@@ -291,6 +299,7 @@ def main(cfg, **kwargs):
     params = main_params[task_name]
     # Update the random seed
     params["random_seed"] = main_params["global"]["random_seed"]
+    params["skip_init_train"] = skip_init_train
 
     # Model type: 'cpainn' (default) or 'mace'
     model_type = params.get("model", "cpainn")

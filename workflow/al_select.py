@@ -30,15 +30,51 @@ def update_namespace(ns:argparse.Namespace, d:dict) -> None:
     for k, v in d.items():
         ns.__dict__[k] = v
 
+# an O-O (OOH) or O-H (OH, OOH) bond present in the starting frame counts as broken beyond these.
+# In the iter_0 MACE relaxations intact OOH reached 1.66 A and a splitting one went 1.62 -> 1.79 -> 2.03 A;
+# the largest O-H was 1.19 A.
+BOND_BREAK = {('O', 'O'): 1.7, ('H', 'O'): 1.3}
+
+
+def intact_adsorbate_frames(frames):
+    """Mask of frames whose O-O and O-H bonds are those of the trajectory's first frame.
+
+    The first frame is the starting structure, so a frame where OOH has split into O + OH, or
+    where H has left its O (to the carbon, an N or the metal), is masked out. The reference is
+    taken again whenever the atoms change, so a file holding several trajectories also works.
+    """
+    keep, ref, bonds = [], None, []
+    for atoms in frames:
+        syms = atoms.get_chemical_symbols()
+        if ref != syms:
+            ref = syms
+            oh = [i for i, s in enumerate(syms) if s in ('O', 'H')]
+            bonds = [(i, j, BOND_BREAK[tuple(sorted((syms[i], syms[j])))])
+                     for k, i in enumerate(oh) for j in oh[k + 1:]
+                     if tuple(sorted((syms[i], syms[j]))) in BOND_BREAK
+                     and atoms.get_distance(i, j, mic=True) < BOND_BREAK[tuple(sorted((syms[i], syms[j])))]]
+        keep.append(all(atoms.get_distance(i, j, mic=True) < d for i, j, d in bonds))
+    return keep
+
+
 def load_pool(pool_set, pool_out_path):
-    """Read the pool set and remove structures with max force > 50 eV/A"""
+    """Read the pool set and remove structures with max force > 50 eV/A or a broken O-O/O-H bond"""
+    if isinstance(pool_set, str):
+        pool_set = [pool_set]
     dataset = []
+    broken = 0
     for traj in pool_set:
         if not os.path.exists(traj):
             logging.info(f"File {traj} does not exist!")
             continue
         if Path(traj).stat().st_size > 0:
-            dataset += read(traj, index=':')
+            frames = read(traj, index=':')
+            keep = intact_adsorbate_frames(frames)
+            dataset += [a for a, k in zip(frames, keep) if k]
+            broken += len(frames) - sum(keep)
+            if not all(keep):
+                logging.info(f"{traj}: {len(frames) - sum(keep)}/{len(frames)} frames with a broken O-O/O-H bond removed")
+    logging.info(f"Removed {broken} frames with a broken O-O/O-H bond")
 
     dataset_new = []
     max_force_threshold = 50
@@ -59,7 +95,7 @@ def load_pool(pool_set, pool_out_path):
         f"Loaded {len(dataset_new)} valid structures out of {len(dataset)} "
         f"(skipped {skipped} high-force structures)"
     )
-    if len(dataset) != len(dataset_new):
+    if broken or len(dataset) != len(dataset_new):
         write(pool_out_path, dataset_new)
         logging.info(f"Filtered structures written to {pool_out_path}")
         return dataset_new, pool_out_path
@@ -254,52 +290,11 @@ def main(cfg,system_name,**kwargs):
     logging.info(f"Selected method: {args.method}")
 
     logging.info(f"Loding the dataset from {args.pool_set} and {args.train_set}")
-    # Load pool set and train set
-    if isinstance(args.pool_set, list):
-        dataset = []
-        for traj in args.pool_set:
-            if not os.path.exists(traj):
-                logging.info(f"File {traj} does not exist!")
-                continue
-            if Path(traj).stat().st_size > 0:
-                dataset += read(traj, index=':')
-
-    # filter structures with max force > 50
-
-    dataset_new = []
-    max_force_threshold = 50
-    skipped = 0
-
-    for atoms in dataset:
-        try:
-            atoms.get_potential_energy()
-
-            forces = atoms.get_forces()
-            max_force = np.max(np.linalg.norm(forces, axis=1))
-
-            if max_force <= max_force_threshold:
-                dataset_new.append(atoms)
-            else:
-                skipped += 1
-                logging.info(f"Skipping structure with max force {max_force:.2f}")
-
-        except Exception as e:
-            logging.info(f"Skipping structure due to error: {e}")
-
-    logging.info(
-        f"Loaded {len(dataset_new)} valid structures out of {len(dataset)} "
-        f"(skipped {skipped} high-force structures)"
+    # Load pool set (drops high-force frames and frames with a broken O-O/O-H bond)
+    dataset, args.pool_set = load_pool(
+        args.pool_set,
+        os.path.join(run_path,'simulate', f'iter_{iter_idx}',system_name,'filtered_pool_set.xyz'),
     )
-
-    if len(dataset) != len(dataset_new):
-        args.pool_set = os.path.join(
-            run_path,'simulate', f'iter_{iter_idx}',system_name,'filtered_pool_set.xyz'
-        )
-        write(args.pool_set,dataset_new)
-
-        logging.info(f"Filtered structures written to {args.pool_set}")
-
-    dataset = dataset_new
 
 
     if models[0].compute_magmom and models[0].compute_bader_charge:
