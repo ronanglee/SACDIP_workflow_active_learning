@@ -9,16 +9,17 @@
 [global] #Global paramters
 run_path = 'sac_ml_opt'    
 random_seed = 3407     
-max_iteration = 20     
+max_iteration = 20
+start_iteration = 2     # continue a finished run: first task trains train/iter_2 (fine-tuned from iter_1, on the dataset incl. iter_1 labels), then simulate/select/label iter_2, ... Set 0 for a fresh run
 workflow_path = '' 
 
 ### 1) Train step ###
 [train] 
 model = 'mace'     # <<< NEW  'mace' or 'cpainn' (default). Also sets the calculator used in the simulate and select steps
-dataset = './train_data/train.extxyz'     # passed to mace_run_train as --train_file; 90 % of the data, made by train_data/make_split.py
+dataset = './train_data/all_data_tipapa.extxyz'     # passed to mace_run_train as --train_file; 90 % of the data, made by train_data/make_split.py
 #val_dataset = './train_data/test.extxyz'     # passed to mace_run_train as --valid_file (so valid_fraction is not used); the 10 % test split
 stop_after_train = false     
-load_model = '/home/energy/rogle/asm_orr_rxn/mlip/active_learning/new_unlabeled_structures/SACDIP_workflow_active_learning/sac_ml_opt/train/iter_0/128_node_6_layer/best_model.model'
+#load_model = '/home/energy/rogle/asm_orr_rxn/mlip/active_learning/new_unlabeled_structures/SACDIP_workflow_active_learning/sac_ml_opt/train/iter_0/128_node_6_layer/best_model.model'
 skip_init_mace_train = false
 load_prev_iter_model = true
 #load_prev_iter_model = true     # for MACE: iteration n is fine-tuned from the same member of iteration n-1 (--foundation_model)
@@ -53,10 +54,10 @@ swa = true     # <<< NEW  flag (--swa); the stage-two (SWA) model is the one the
 swa_energy_weight = 10.0     # <<< NEW
 swa_forces_weight = 100.0     # <<< NEW
 scheduler_patience = 5     # <<< NEW
-batch_size = 4     # <<< NEW
-valid_batch_size = 4     # <<< NEW
+batch_size = 8     # <<< NEW
+valid_batch_size = 12     # <<< NEW
 pair_repulsion = true     # <<< NEW  flag
-max_num_epochs = 50     # <<< NEW  per iteration
+max_num_epochs = 300     # <<< NEW  per iteration
 patience = 10     # <<< NEW
 amsgrad = true     # <<< NEW  flag
 device = 'cuda'     # <<< NEW  (mace_run_train defaults to cpu)
@@ -75,14 +76,17 @@ plot = true     # <<< NEW
 # Any [train.mace] option can be overridden per member, e.g. {seed = 444, lr = 0.005}.
 # MACE's name for the cPaiNN node_size is num_channels (--node_size is not a mace_run_train option).
 # No seed given: each member gets random_seed + member index.
+# If [train.mace] foundation_model is set, the parameters below are ignored (the architecture is the foundation
+# model's): only the number of entries is used (one member per entry, differing by seed), and the member dirs are
+# named <model file>_<class>_<channels>ch_L<lmax>_<interactions>int_r<cutoff>_seed<seed> instead of the entry names.
 [train.ensemble]     # <<< CHANGED
-#64_node_5_layer  = {num_channels = 64,  num_interactions = 5}     # <<< CHANGED
+64_node_5_layer  = {num_channels = 64,  num_interactions = 5}     # <<< CHANGED
 
 #96_node_3_layer  = {num_channels = 96,  num_interactions = 3}     # <<< CHANGED
 #96_node_5_layer  = {num_channels = 96,  num_interactions = 5}     # <<< CHANGED
 
 #128_node_4_layer = {num_channels = 128, num_interactions = 4}     # <<< CHANGED
-128_node_6_layer = {num_channels = 128, num_interactions = 6}     # <<< CHANGED
+#128_node_6_layer = {num_channels = 128, num_interactions = 6}     # <<< CHANGED
 
 ### 2) Simulate step ###
 [simulate.optimize] 
@@ -179,7 +183,7 @@ structure_path = './train_data/unlabeled_data/training_batch20.xyz'
 
 ### 3) Select step ###
 [select]
-train_set = './train_data/train.extxyz'
+train_set = './train_data/all_data_tipapa.extxyz'
 kernel = "gnn"     # <<< CHANGED  MACE has no gradient features: use "gnn" (MACE descriptors), "local_gnn" (+ max_det_greedy_local), "qbc-energy"/"qbc-force"/"random" (+ max_diag)
 selection = "lcmd_greedy"     
 n_random_features = 500     # not used for MACE
@@ -248,68 +252,68 @@ method = 'optimize'
 
 ### 4) Labeling step ###
 [labeling] 
-train_set = './train_data/train.extxyz'     # <<< CHANGED  was ./Example_data/..., which does not exist; new labels must be appended to [train] dataset
+train_set = './train_data/all_data_tipapa.extxyz'     # <<< CHANGED  was ./Example_data/..., which does not exist; new labels must be appended to [train] dataset
 method='VASP' 
 
 [labeling.runs.opt_batch1]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch2]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch3]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch4]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch5]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch6]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch7]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch8]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch9]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch10]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch11]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch12]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch13]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch14]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch15]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch16]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch17]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch18]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch19]
-nsw = 5
+nsw = 10
 
 [labeling.runs.opt_batch20]
-nsw = 5
+nsw = 10
 
 
 
@@ -332,7 +336,6 @@ xc = 'PBE'
 prec = 'Accurate'
 ibrion = 2
 icharg = 1
-idipol = 3
 isif = 0
 ismear = -1
 ispin = 2
@@ -344,7 +347,7 @@ nelm = 100
 nelmdl = -8
 nelmin = 4
 nsim = 4
-nsw = 5
+nsw = 10
 lasph = true
 lcharg = true
 lcorr = true
@@ -356,4 +359,4 @@ lsol = true
 kpts = [3,3,1]
 lreal = 'auto'
 ncore = 4
-command = 'srun /home/modules/energy/software/VASP/5.4.4-intel-2023a-vtst-vaspsol-wannier-beef/bin/vasp_std'
+command = 'srun /home/energy/rogle/builds/software/VASP/5.4.4-intel-2025b-vtst-vaspsol-wannier-beef/bin/vasp_std'

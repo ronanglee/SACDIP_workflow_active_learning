@@ -187,7 +187,28 @@ def update_namespace(ns: argparse.Namespace, d: dict) -> None:
         ns.__dict__[k] = v
 
 
-def train_mace_member(main_params, params, iter_idx, idx):
+def foundation_model_name(model_file):
+    """
+    Directory name describing a MACE foundation model's architecture,
+    e.g. mace-mh-1_ScaleShiftMACE_512ch_L1_2int_r6
+    Falls back to the file name if the model cannot be read.
+    """
+    import torch
+
+    stem = os.path.splitext(os.path.basename(model_file))[0]
+    try:
+        model = torch.load(model_file, map_location="cpu", weights_only=False)
+        hidden_irreps = model.interactions[0].hidden_irreps
+        return (
+            f"{stem}_{type(model).__name__}_{hidden_irreps[0].mul}ch_L{hidden_irreps.lmax}"
+            f"_{int(model.num_interactions)}int_r{float(model.r_max):g}"
+        )
+    except Exception as e:
+        print(f"Could not read the architecture of {model_file} ({e}), naming the directory {stem}")
+        return stem
+
+
+def train_mace_member(main_params, params, iter_idx, idx, in_cycle):
     """
     Train one MACE ensemble member with mace_run_train.
     All options in the [train.mace] table (and the member's [train.ensemble] entry) are passed on to mace_run_train.
@@ -230,7 +251,7 @@ def train_mace_member(main_params, params, iter_idx, idx):
         if os.path.exists(prev_model):
             logging.info(f"Load model from {prev_model}")
             mace_options["foundation_model"] = prev_model
-    elif params['load_model']:
+    elif params.get('load_model'):
         logging.info(f"Load model from {params['load_model']}")
         mace_options["foundation_model"] = params['load_model']
 
@@ -253,8 +274,8 @@ def train_mace_member(main_params, params, iter_idx, idx):
         "run_list": str(run_list),
     }
 
-    # Include the stop after train parameter
-    if iter_idx > 0:
+    # Include the stop after train parameter (only for the train task inside the cycle)
+    if in_cycle:
         return_parameters[CYCLICALGROUP_KEY] = params.get("stop_after_train", False)
 
     return True, return_parameters
@@ -280,11 +301,15 @@ def main(cfg, skip_init_train, **kwargs):
         main_params = toml.load(f)
 
     # Creating the iteration folder and create the return parameters for the next iteration (will be updated later with the number of simualtion runs)
-    if ITER_KW not in kwargs:
-        iter_idx = 0
+    # [global] start_iteration shifts all iteration numbers, so a finished run can be continued:
+    # the first train task writes train/iter_<start_iteration> (fine-tuned from iter_<start_iteration-1>)
+    start_iter = main_params["global"].get("start_iteration", 0)
+    in_cycle = ITER_KW in kwargs
+    if not in_cycle:
+        iter_idx = start_iter
     else:
         iter_idx, *_ = kwargs[ITER_KW]
-        iter_idx += 1
+        iter_idx += 1 + start_iter
 
     # Find simulation keys
     #run_list = list(main_params['simulate']['runs'].keys())
@@ -304,8 +329,14 @@ def main(cfg, skip_init_train, **kwargs):
     # Model type: 'cpainn' (default) or 'mace'
     model_type = params.get("model", "cpainn")
 
+    # A foundation model fixes the architecture, so the [train.ensemble] parameters are ignored.
+    # Members (one per ensemble entry) differ only by seed and are named after the foundation model.
+    foundation_model = params.get("mace", {}).get("foundation_model") if model_type == "mace" else None
+    if foundation_model:
+        seed = params["mace"].get("seed", main_params["global"]["random_seed"] + idx)
+        params["output_dir"] = f"{foundation_model_name(foundation_model)}_seed{seed}"
     # If ensemble training is used, update the parameters and rename model output
-    if "ensemble" in params:
+    elif "ensemble" in params:
         ensemble_keys = list(params["ensemble"].keys())
         if model_type == "mace":
             # For MACE the ensemble entries are mace_run_train options for each member
@@ -315,7 +346,7 @@ def main(cfg, skip_init_train, **kwargs):
         params["output_dir"] = ensemble_keys[idx]
 
     if model_type == "mace":
-        return train_mace_member(main_params, params, iter_idx, idx)
+        return train_mace_member(main_params, params, iter_idx, idx, in_cycle)
     elif model_type != "cpainn":
         raise NotImplementedError(f"Model {model_type} not implemented. Use 'cpainn' or 'mace'")
 
@@ -660,7 +691,7 @@ def main(cfg, skip_init_train, **kwargs):
                 }
 
                # Include the stop after train parameter
-                if iter_idx > 0:
+                if in_cycle:
                     return_parameters[CYCLICALGROUP_KEY] = args.stop_after_train
 
                 return True, return_parameters
@@ -699,7 +730,7 @@ def main(cfg, skip_init_train, **kwargs):
             }
 
             # Include the stop after train parameter
-            if iter_idx > 0:
+            if in_cycle:
                 return_parameters[CYCLICALGROUP_KEY] = args.stop_after_train
 
             print(return_parameters)

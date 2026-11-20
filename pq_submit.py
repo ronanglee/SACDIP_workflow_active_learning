@@ -37,9 +37,10 @@ if not os.path.isdir(run_path / "labeling"):
 ### Task resources ###
 # resources = "8:1:1:sm3090_devel:1h"
 resources = "10:1:sm3090el9:2d"
-resources2 = "40:1:xeon40el8:25h"
-Train_resources = "64:1:a100:2d"
-Train_after_label_res = "64:1:a100:2d"
+resources2 = "40:1:xeon40el9:25h"
+# Train_resources = "32:1:a100el9:2d"
+Train_resources = "32:1:sm3090el9_devel:1h"
+Train_after_label_res = "32:1:a100el9:2d"
 Simulation_resources = resources
 Activelearning_resources = resources
 Labeling_resources = resources2
@@ -49,9 +50,12 @@ main_argument_train_init = {"cfg": str(config_file_path), "skip_init_train": con
 main_argument_train_after_label = {"cfg": str(config_file_path), "skip_init_train": 'false'}
 main_argument = {"cfg": str(config_file_path)}
 
+# When continuing a run ([global] start_iteration > 0) the first train task is a full fine-tune
+# of the previous iteration's model: give it enough walltime (Train_after_label_res-like resources)
+start_iteration = config["global"].get("start_iteration", 0)
 Train_init = Task(
     workflow / "workflow/train.py",
-    name="Train MLP model",
+    name="Train MLP model" if start_iteration == 0 else f"Train MLP model iter {start_iteration}",
     args=main_argument_train_init,
     resources=Train_resources,
 )

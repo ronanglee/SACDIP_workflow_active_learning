@@ -182,6 +182,8 @@ def main(cfg,system_name,**kwargs):
     # Load all parameters from config file
     with open(cfg, 'r') as f:
         main_params = toml.load(f)
+    # Shift by [global] start_iteration (continuing a finished run)
+    iter_idx += main_params['global'].get('start_iteration', 0)
 
     # Load local parameters
     task_name = 'select'

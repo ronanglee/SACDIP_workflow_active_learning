@@ -14,6 +14,8 @@ def main(cfg,run_list,**kwargs):
     # Load all parameters from config file
     with open(cfg, 'r') as f:
         main_params = toml.load(f)
+    # Shift by [global] start_iteration (continuing a finished run)
+    iter_idx += main_params['global'].get('start_iteration', 0)
     # Append workflow path to the main parameters
     sys.path.append(main_params['global']['workflow_path'])
 

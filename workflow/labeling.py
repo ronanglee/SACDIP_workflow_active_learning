@@ -9,12 +9,60 @@ import toml
 from pathlib import Path
 from ase.calculators.calculator import CalculationFailed
 import re
+import time
 
 from perqueue.constants import DYNAMICWIDTHGROUP_KEY,CYCLICALGROUP_KEY, ITER_KW, INDEX_KW
 
 # Any SCF line in OSZICAR, e.g. "DAV:  12", "RMM:  3", "CG :  5", "DMP:  1"
 SCF_LINE_RE = re.compile(r"^\s*[A-Za-z]{2,4}\s*:\s*\d+")
 MAX_FORCE = 5.0  # eV/A, frames above this are treated as unphysical
+
+# Walltime handling (overridable in [labeling] of config.toml).
+# Each VASP run is wrapped in `timeout` so it is stopped before SLURM kills the job;
+# the finished ionic steps are harvested and the task returns normally, so the
+# workflow carries on to the training step instead of stalling on a timed-out entry.
+TIME_MARGIN_MINUTES = 20   # kept free at the end for harvesting + writing the train set
+MIN_CALC_MINUTES = 30      # do not start a new VASP run with less time than this left
+TIMEOUT_KILL_AFTER = 120   # s between SIGTERM and SIGKILL for a VASP run over its budget
+
+
+def parse_slurm_time(s):
+    """Seconds from a SLURM duration: [days-]hours:minutes:seconds, minutes:seconds, or minutes."""
+    s = s.strip()
+    days = 0
+    if '-' in s:
+        d, s = s.split('-', 1)
+        days = int(d)
+    parts = [int(p) for p in s.split(':')]
+    if days:
+        parts += [0] * (3 - len(parts))   # "D-HH" / "D-HH:MM" are hours-first
+    elif len(parts) == 1:
+        parts = [0, parts[0], 0]           # bare number = minutes
+    else:
+        parts = [0] * (3 - len(parts)) + parts
+    h, m, sec = parts
+    return days * 86400 + h * 3600 + m * 60 + sec
+
+
+def job_end_time():
+    """Unix time at which SLURM will kill this job, or None if unknown (e.g. local run)."""
+    end = os.environ.get('SLURM_JOB_END_TIME')
+    if end:
+        try:
+            return float(end)
+        except ValueError:
+            pass
+    job_id = os.environ.get('SLURM_JOB_ID')
+    if not job_id:
+        return None
+    try:
+        left = subprocess.run(['squeue', '-h', '-j', job_id, '-o', '%L'],
+                              capture_output=True, text=True, timeout=60).stdout.strip()
+        return time.time() + parse_slurm_time(left)
+    except Exception as e:   # UNLIMITED, NOT_SET, squeue unavailable, ...
+        print(f"WARNING: could not determine the job time limit ({e}); "
+              "VASP runs will not be time-limited.")
+        return None
 
 
 def read_incar_value(incar_path, key, default=None, cast=float):
@@ -59,8 +107,12 @@ def select_by_fmax(fmaxs, fmin=0.01, fmax_cap=MAX_FORCE, nbins=12, per_bin=2):
     return sorted(set(keep + [0, len(fmaxs) - 1]))
 
 
-def label_vasp_trajectory(system_dir, db, al_ind, iter_idx, warning_traj):
+def label_vasp_trajectory(system_dir, db, al_ind, iter_idx, warning_traj, timed_out=False):
     """Write a force-binned subset of the ionic steps in vasprun.xml to `db`.
+
+    With timed_out=True the run was stopped at its time budget: vasprun.xml is
+    truncated and only the completed ionic steps are read (ASE drops the
+    unfinished one), and the rows get timed_out=True.
 
     Returns (n_written, n_selected, scf_ok_all, ionic_ok).
     """
@@ -89,7 +141,9 @@ def label_vasp_trajectory(system_dir, db, al_ind, iter_idx, warning_traj):
 
     # ionic convergence: final force below EDIFFG target, or finished before NSW
     final_fmax = fmaxs[-1]
-    if nsw <= 1:
+    if timed_out and not (f_target is not None and final_fmax < f_target):
+        ionic_ok = False    # stopped early and not at the force target
+    elif nsw <= 1:
         ionic_ok = True     # single point, nothing to converge
     elif f_target is not None:
         ionic_ok = bool(final_fmax < f_target)
@@ -110,7 +164,7 @@ def label_vasp_trajectory(system_dir, db, al_ind, iter_idx, warning_traj):
         # 'fmax' is a reserved ASE db key, hence 'max_force'
         meta = dict(al_ind=al_ind, iter=iter_idx, step=step, nsteps=n,
                     max_force=fmax, is_initial=(step == 0), is_final=(step == n - 1),
-                    ionic_converged=ionic_ok)
+                    ionic_converged=ionic_ok, timed_out=timed_out)
 
         # SCF not converged at this ionic step -> forces unreliable
         if not scf_ok[step]:
@@ -202,6 +256,8 @@ def main(cfg,system_name,**kwargs):
 
     with open(cfg, 'r') as f:
         main_params = toml.load(f)
+    # Shift by [global] start_iteration (continuing a finished run)
+    iter_idx += main_params['global'].get('start_iteration', 0)
 
     # Find how many models to train and return to the run directory
     #params_train = main_params['train']
@@ -318,19 +374,65 @@ def main(cfg,system_name,**kwargs):
     vasp_params["lwave"] = False
 
     calc = Vasp(**vasp_params,directory=system_dir)
+    base_command = calc.make_command(calc.command)
+
+    # Time budget: stop VASP before SLURM kills the job so the task can still return
+    margin = float(params.get('time_margin_minutes', TIME_MARGIN_MINUTES)) * 60
+    min_calc = float(params.get('min_calc_minutes', MIN_CALC_MINUTES)) * 60
+    max_calc = params.get('max_calc_hours')        # optional cap on a single VASP run
+    max_calc = float(max_calc) * 3600 if max_calc else None
+    end_time = job_end_time()
+    if end_time is not None:
+        print(f"Job time left: {(end_time - time.time()) / 3600:.2f} h "
+              f"(margin {margin / 60:.0f} min)")
+    timeout_idx, skipped_idx = [], []
+
     for i, atoms in enumerate(images):
         al_ind = al_indices[i]
+
+        budget = None
+        if end_time is not None:
+            budget = end_time - time.time() - margin
+            if budget < min_calc:
+                skipped_idx = [int(x) for x in al_indices[i:]]
+                print(f"Only {max(budget, 0) / 60:.0f} min left before the margin; "
+                      f"not starting {len(skipped_idx)} remaining calculation(s): {skipped_idx}")
+                break
+        if max_calc is not None:
+            budget = max_calc if budget is None else min(budget, max_calc)
+        if budget is None:
+            calc.command = base_command
+        else:
+            calc.command = (f"timeout --signal=TERM --kill-after={TIMEOUT_KILL_AFTER} "
+                            f"{int(budget)} {base_command}")
+
         atoms.set_pbc([True,True,True])
+        if calc.int_params.get('idipol') is not None:
+            com = atoms.get_center_of_mass(scaled=True)
+            calc.set(dipol=com.tolist())
         atoms.calc = calc
+        t0 = time.time()
+        timed_out = False
         try:
-            atoms.get_potential_energy()
+            try:
+                atoms.get_potential_energy()
+            except CalculationFailed:
+                # `timeout` returns 124 (137 after SIGKILL); either way the budget ran out
+                if budget is None or time.time() - t0 < budget - 5:
+                    raise
+                timed_out = True
+                timeout_idx.append(int(al_ind))
+                print(f"[{al_ind}] VASP stopped at its {budget / 3600:.2f} h time budget; "
+                      "harvesting the completed ionic steps.")
             n_written, n_selected, scf_ok, ionic_ok = label_vasp_trajectory(
-                system_dir, db, al_ind, iter_idx, warning_traj
+                system_dir, db, al_ind, iter_idx, warning_traj, timed_out=timed_out
             )
-        except (CalculationFailed, ValueError, IndexError, FileNotFoundError) as e:
+        except (CalculationFailed, ValueError, IndexError, FileNotFoundError, RuntimeError) as e:
+            # RuntimeError: a timed-out run with no completed ionic step has no forces
             print(f"VASP calculation failed or output unparseable (e.g. lost atoms) for index {al_ind}: {e}")
             check_result = True
-            db.write(atoms,al_ind=al_ind,iter=iter_idx,converged=False,reason='failed')
+            db.write(atoms, al_ind=al_ind, iter=iter_idx, converged=False,
+                     reason='timeout' if timed_out else 'failed')
             failed_idx.append(int(al_ind))
             try: # If it did not save the CHGCAR
                 copy(os.path.join(system_dir,'OSZICAR'), os.path.join(system_dir,f'OSZICAR_{i}_{al_ind}'))
@@ -372,6 +474,13 @@ def main(cfg,system_name,**kwargs):
         print("WARNING: Some DFT calculations did not converge on ionic steps. Still saved the structures to the database.")
         print(f"Unconverged indices: {ionic_idx}")
         print(f"Total unconverged: {len(ionic_idx)}")
+    if timeout_idx:
+        print("WARNING: Some VASP runs hit their time budget; completed ionic steps were kept (timed_out=True).")
+        print(f"Timed-out indices: {timeout_idx}")
+    if skipped_idx:
+        print("WARNING: Not enough walltime left to label all selected structures; these were not run "
+              "and are not in the database (a resubmit of this task would run them).")
+        print(f"Skipped indices: {skipped_idx}")
 
 
     # write to training set

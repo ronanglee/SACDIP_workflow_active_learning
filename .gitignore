@@ -8,4 +8,4 @@ train_data
 .pq*
 mace_valid*
 sac_ml_opt
-old_config.toml
+old_config.toml__pycache__
